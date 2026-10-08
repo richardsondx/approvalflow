@@ -1,0 +1,41 @@
+# approvalflow
+
+Human approval queue for AI agents. Repo: https://github.com/richardsondx/approvalflow
+
+## Install
+
+npm i approvalflow
+Zero runtime dependencies. Node 20+.
+
+## Quickstart
+
+import { createQueue } from "approvalflow";
+const queue = createQueue({ dir: "./approvals", hmacSecret: process.env.APPROVALFLOW_SECRET });
+const req = await queue.submit({ agent: "support", action: "issue_refund",
+  params: { orderId: 1, usd: 500 }, approvers: ["owner"] });
+const waiting = req.wait();
+await queue.approve(req.id, { approverId: "owner", reason: "verified" });
+const d = await waiting; // { approved, approverId, approverIds, decidedAt, reason, signature }
+queue.verifySignature(d); // true when untampered and secret matches
+
+## API
+
+- createQueue({ dir, hmacSecret, defaultTtlMs=600000, onExpire="deny"|"escalate", escalateTo?, approveUrlBase?, notifiers? })
+- queue.submit({ agent, action, params, approvers, risk?, context?, quorum=1, ttlMs? }) -> PendingRequest { id, status, wait(), summary() }
+- req.wait() -> ApprovalDecision | rejects ApprovalDeniedError (has .decision) | ApprovalExpiredError
+- queue.approve(id, { approverId, reason? }) — quorum distinct approvers resolve; duplicates ignored
+- queue.deny(id, { approverId, reason? }) — immediate deny
+- queue.delegate(id, { from, to, reason? }) — chain recorded, delegate added to approvers
+- queue.escalate(id, { to, reason? }) — reassign approvers, extend TTL one period
+- queue.listPending() -> PendingSummary[]
+- queue.getRequest(id) -> full record with history and signed decision
+- queue.verifySignature(decision) -> boolean (HMAC-SHA256)
+- queue.close() — stop timers
+
+## Behavior
+
+- One JSON file per request under dir; pending requests reload on startup; approvals survive restarts.
+- TTL expiry: onExpire "deny" rejects waiters with ApprovalExpiredError; "escalate" reassigns to escalateTo once, then denies on second expiry.
+- Every state change appends { ts, requestId, event, actor, detail } to dir/audit.jsonl.
+- notifiers: { onEvent(event), webhookUrl } — webhook POSTs Slack-compatible { text, requestId, action, risk, approveUrlHint }, fire-and-forget.
+- Use as the human side of callgate's REQUIRE_APPROVAL, or standalone in any agent loop.
